@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Singing Pitch Trainer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
+    <script src="https://unpkg.com/vexflow@4.2.4/build/cjs/vexflow.js"></script>
+    <style>
+      /* Style for SVG icons within buttons */
+      .button-icon {
+         width: 1.2rem; height: 1.2rem; margin-right: 0.5rem;
+         display: inline-block; vertical-align: middle;
+      }
+      #stave-container {
+        width: 100%; height: 150px; display: flex; justify-content: center; align-items: center;
+        background-color: #ffffff; border-radius: 0.5rem; border: 1px solid #e5e7eb;
+        margin-bottom: 1rem; overflow: hidden;
+      }
+      #pitch-canvas {
+          display: block; width: 100%; height: 150px; background-color: #f8fafc;
+          border-radius: 0.5rem; border: 1px solid #e5e7eb; margin-top: 1rem;
+      }
+      #cents-display { font-weight: 600; min-width: 80px; display: inline-block; }
+      #cents-display.in-tune { color: #16a34a; }
+      #cents-display.high { color: #dc2626; }
+      #cents-display.low { color: #2563eb; }
+    </style>
+</head>
+<body class="bg-gray-100 font-sans flex flex-col items-center justify-center min-h-screen p-4">
+
+    <div class="bg-white p-8 rounded-lg shadow-lg w-full max-w-md text-center">
+        <h1 class="text-2xl font-bold mb-6 text-gray-800">Singing Pitch Trainer</h1>
+
+        <div class="mb-4">
+             <label for="note-select" class="block text-sm font-medium text-gray-700 mb-2">Select Target Note:</label>
+            <select id="note-select" class="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
+            </select>
+        </div>
+
+        <div id="stave-container"></div>
+
+        <div class="flex space-x-2 mb-4">
+             <button id="play-note-button" title="Play selected note" class="flex-shrink-0 bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-4 rounded-md transition duration-150 ease-in-out flex items-center justify-center">
+                 <img src="https://cdn.jsdelivr.net/npm/lucide-static@latest/icons/play.svg" alt="Play" class="button-icon filter invert brightness-0 invert-[1]" />
+             </button>
+             <button id="start-button" class="flex-grow bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-4 rounded-md transition duration-150 ease-in-out flex items-center justify-center">
+                <img id="start-stop-icon" src="https://cdn.jsdelivr.net/npm/lucide-static@latest/icons/mic.svg" alt="Start" class="button-icon filter invert brightness-0 invert-[1]" />
+                <span>Start Listening</span>
+            </button>
+        </div>
+
+        <div class="flex justify-between items-center mb-4 h-6">
+            <span id="status" class="text-gray-600">Ready</span>
+            <span id="cents-display" class="text-gray-600 text-sm">-- cents</span>
+        </div>
+
+        <canvas id="pitch-canvas"></canvas>
+
+        <div class="text-sm text-gray-500 mt-4">
+            Target: <span id="target-freq">-</span> Hz | Current: <span id="current-freq">-</span> Hz
+        </div>
+    </div>
+
+    <script>
+        // Wrap entire script in a check for VexFlow loading
+        window.addEventListener('load', () => {
+            console.log("Window loaded. Checking VexFlow...");
+            if (typeof Vex === 'undefined' || typeof Vex.Flow === 'undefined') {
+                console.error("VexFlow library not loaded or failed to initialize!");
+                const statusDiv = document.getElementById('status'); if (statusDiv) statusDiv.textContent = "Error: Notation library failed to load.";
+                const noteSelect = document.getElementById('note-select'); const staveContainer = document.getElementById('stave-container');
+                 if (noteSelect) noteSelect.disabled = true; if (staveContainer) staveContainer.innerHTML = '<p class="text-red-500 p-4">Failed to load VexFlow library. Stave cannot be displayed.</p>';
+                return;
+            }
+            console.log("VexFlow loaded successfully. Initializing App...");
+            initializeApp();
+        });
+
+        // VexFlow setup
+        const { Factory, StaveNote, Stave, Voice, Formatter, Accidental } = Vex.Flow;
+
+        // --- Configuration ---
+        const notes = { /* Notes object */
+            'C3': 130.81, 'C#3/Db3': 138.59, 'D3': 146.83, 'D#3/Eb3': 155.56, 'E3': 164.81, 'F3': 174.61, 'F#3/Gb3': 185.00, 'G3': 196.00, 'G#3/Ab3': 207.65, 'A3': 220.00, 'A#3/Bb3': 233.08, 'B3': 246.94,
+            'C4': 261.63, 'C#4/Db4': 277.18, 'D4': 293.66, 'D#4/Eb4': 311.13, 'E4': 329.63, 'F4': 349.23, 'F#4/Gb4': 369.99, 'G4': 392.00, 'G#4/Ab4': 415.30, 'A4': 440.00, 'A#4/Bb4': 466.16, 'B4': 493.88,
+            'C5': 523.25, 'C#5/Db5': 554.37, 'D5': 587.33, 'D#5/Eb5': 622.25, 'E5': 659.25, 'F5': 698.46, 'F#5/Gb5': 739.99, 'G5': 783.99, 'G#5/Ab5': 830.61, 'A5': 880.00, 'A#5/Bb5': 932.33, 'B5': 987.77
+        };
+        const toleranceCents = 20; const historySize = 200; const centsRangeVisual = 100; const notePlayDuration = 1.0;
+        const MIN_RMS_THRESHOLD = 0.005; // Lowered RMS threshold
+        const MIN_DETECTABLE_FREQ = 60; // Minimum reasonable singing frequency (approx B1)
+        const MAX_DETECTABLE_FREQ = 1500; // Maximum reasonable singing frequency (approx G6/A6)
+
+
+        // --- DOM Elements ---
+        let noteSelect, startButton, playNoteButton, statusDiv, centsDisplay, pitchCanvas, targetFreqSpan, currentFreqSpan, startStopIcon, startButtonText, staveContainer;
+
+        // --- Audio Variables ---
+        let audioContext; let analyser; let microphoneStream; let scriptProcessor; const bufferSize = 2048; let pitchBuffer = new Float32Array(bufferSize); let isListening = false; let animationFrameId; let targetFrequency = notes['A4'];
+
+        // --- VexFlow Variables ---
+        let vf, stave, vexContext;
+
+        // --- Canvas Visualizer Variables ---
+        let canvasCtx; let pitchHistory = []; let canvasWidth, canvasHeight;
+
+        // --- Icon URLs ---
+        const iconUrls = { mic: 'https://cdn.jsdelivr.net/npm/lucide-static@latest/icons/mic.svg', stop: 'https://cdn.jsdelivr.net/npm/lucide-static@latest/icons/square.svg' };
+
+        // --- Main Initialization Function ---
+        function initializeApp() { /* Remains the same */
+            console.log("initializeApp started");
+            noteSelect = document.getElementById('note-select'); startButton = document.getElementById('start-button'); playNoteButton = document.getElementById('play-note-button'); statusDiv = document.getElementById('status'); centsDisplay = document.getElementById('cents-display'); pitchCanvas = document.getElementById('pitch-canvas'); targetFreqSpan = document.getElementById('target-freq'); currentFreqSpan = document.getElementById('current-freq'); startStopIcon = document.getElementById('start-stop-icon'); startButtonText = startButton.querySelector('span:last-child'); staveContainer = document.getElementById('stave-container');
+             if (typeof AudioContext === "undefined" && typeof webkitAudioContext === "undefined") { setStatus("Web Audio API not supported.", true); if(startButton) startButton.disabled = true; if(playNoteButton) playNoteButton.disabled = true; return; }
+             try { audioContext = new (window.AudioContext || window.webkitAudioContext)(); console.log("AudioContext created/resumed, state:", audioContext.state); } catch (e) { console.error("Failed to create AudioContext:", e); setStatus("Failed to initialize audio.", true); if(startButton) startButton.disabled = true; if(playNoteButton) playNoteButton.disabled = true; return; }
+            initializeStave(); populateNoteSelector(); noteSelect.value = 'A4'; initializeCanvas(); updateTargetFrequency();
+            startButton.addEventListener('click', toggleListening); playNoteButton.addEventListener('click', playSelectedNote); noteSelect.addEventListener('change', updateTargetFrequency); window.addEventListener('resize', handleResize);
+            console.log("initializeApp finished, event listeners added.");
+        }
+
+        // --- Audio Playback ---
+        async function playSelectedNote() { /* Remains the same */
+            if (!targetFrequency || !audioContext) return; if (audioContext.state === 'suspended') { try { await audioContext.resume(); } catch (err) { console.error("AudioContext resume failed:", err); setStatus("Audio playback failed.", true); return; } } const now = audioContext.currentTime; const attackTime = 0.01; const decayTime = 0.1; const sustainLevel = 0.1; const releaseTime = notePlayDuration - attackTime - decayTime; const oscillator = audioContext.createOscillator(); oscillator.type = 'triangle'; oscillator.frequency.setValueAtTime(targetFrequency, now); const gainNode = audioContext.createGain(); gainNode.gain.setValueAtTime(0, now); gainNode.gain.linearRampToValueAtTime(1.0, now + attackTime); gainNode.gain.linearRampToValueAtTime(sustainLevel, now + attackTime + decayTime); gainNode.gain.setTargetAtTime(0.0001, now + attackTime + decayTime, releaseTime / 4); oscillator.connect(gainNode); gainNode.connect(audioContext.destination); oscillator.start(now); oscillator.stop(now + notePlayDuration); playNoteButton.disabled = true; setTimeout(() => { playNoteButton.disabled = false; }, notePlayDuration * 1000);
+        }
+
+        // --- Stave Initialization and Drawing ---
+        function initializeStave() { /* Remains the same */
+            console.log("Initializing Stave..."); staveContainer.innerHTML = ''; try { vf = new Factory({ renderer: { elementId: 'stave-container', width: staveContainer.clientWidth, height: staveContainer.clientHeight } }); vexContext = vf.getContext(); const staveWidth = Math.max(150, Math.min(250, staveContainer.clientWidth - 40)); const staveX = (staveContainer.clientWidth - staveWidth) / 2; stave = vf.Stave({ x: staveX, y: 20, width: staveWidth }); stave.addClef('treble'); stave.draw(); console.log("Stave initialized and drawn."); } catch (e) { console.error("Error initializing VexFlow stave:", e); setStatus("Error initializing notation display.", true); staveContainer.innerHTML = '<p class="text-red-500 p-4">Error drawing stave</p>'; vf = null; stave = null; vexContext = null; }
+        }
+        function drawNoteOnStave(noteName) { /* Remains the same */
+            if (!vf || !stave || !vexContext || !noteName) { console.warn("Skipping drawNoteOnStave: VexFlow not ready or no note name.", { vf, stave, vexContext, noteName }); return; } console.log(`Drawing note: ${noteName}`); try { vexContext.clear(); stave.draw(); const vexNote = parseNoteForVexFlow(noteName); if (!vexNote) { console.warn(`Failed to parse note: ${noteName}`); return; } console.log("Parsed note for VexFlow:", vexNote); const staveNote = new StaveNote({ keys: [vexNote.key], duration: "q" }); if (vexNote.accidental) { if (typeof Accidental === 'function') { staveNote.addModifier(new Accidental(vexNote.accidental)); } else { console.warn("Vex.Flow.Accidental constructor not found"); } } const voice = new Voice({ num_beats: 1, beat_value: 4 }); voice.setStrict(false); voice.addTickable(staveNote); console.log("Voice created with 1/4 time signature and note added."); if (typeof Formatter === 'function') { console.log("Formatting voice..."); new Formatter().joinVoices([voice]).format([voice], stave.getWidth() * 0.8); console.log("Voice formatted."); } else { console.warn("Vex.Flow.Formatter constructor not found"); } console.log("Drawing voice..."); voice.draw(vexContext, stave); console.log("Voice drawn successfully."); } catch (e) { console.error(`Error drawing note ${noteName} on stave:`, e); setStatus("Error drawing note.", true); }
+        }
+
+        // --- Canvas Initialization and Drawing ---
+        function initializeCanvas() { /* Remains the same */
+             console.log("Initializing canvas..."); canvasCtx = pitchCanvas.getContext('2d'); setCanvasDimensions(); clearCanvas(); console.log("Canvas initialized.");
+        }
+        function setCanvasDimensions() { /* Remains the same */
+             canvasWidth = pitchCanvas.clientWidth; canvasHeight = pitchCanvas.clientHeight; pitchCanvas.width = canvasWidth; pitchCanvas.height = canvasHeight;
+        }
+        function handleResize() { /* Remains the same */
+             console.log("Resize detected"); setCanvasDimensions(); drawVisualizer(null);
+        }
+        function clearCanvas() { /* Remains the same */
+            if (!canvasCtx) return; canvasCtx.clearRect(0, 0, canvasWidth, canvasHeight);
+        }
+        function drawVisualizer(currentFrequency) { /* Remains the same */
+            if (!canvasCtx) return; clearCanvas(); const centerY = canvasHeight / 2; let currentCents = null; if (currentFrequency !== null && currentFrequency > 0 && targetFrequency > 0) { currentCents = 1200 * Math.log2(currentFrequency / targetFrequency); } pitchHistory.push(currentCents); if (pitchHistory.length > historySize) { pitchHistory.shift(); } const toleranceHeight = (toleranceCents / centsRangeVisual) * (canvasHeight / 2); canvasCtx.fillStyle = 'rgba(34, 197, 94, 0.1)'; canvasCtx.fillRect(0, centerY - toleranceHeight, canvasWidth, toleranceHeight * 2); canvasCtx.strokeStyle = '#3b82f6'; canvasCtx.lineWidth = 2; canvasCtx.beginPath(); canvasCtx.moveTo(0, centerY); canvasCtx.lineTo(canvasWidth, centerY); canvasCtx.stroke(); canvasCtx.lineWidth = 2; canvasCtx.beginPath(); let firstPoint = true; for (let i = 0; i < pitchHistory.length; i++) { const cents = pitchHistory[i]; const x = (i / (historySize - 1)) * canvasWidth; if (cents !== null) { const yOffset = (cents / centsRangeVisual) * (canvasHeight / 2); let y = centerY - yOffset; y = Math.max(canvasCtx.lineWidth, Math.min(canvasHeight - canvasCtx.lineWidth, y)); if (Math.abs(cents) <= toleranceCents) { canvasCtx.strokeStyle = '#16a34a'; } else if (cents > toleranceCents) { canvasCtx.strokeStyle = '#dc2626'; } else { canvasCtx.strokeStyle = '#2563eb'; } if (firstPoint) { canvasCtx.moveTo(x, y); firstPoint = false; } else { canvasCtx.lineTo(x, y); } } else { firstPoint = true; } } canvasCtx.stroke(); if (currentCents !== null && pitchHistory.length > 0) { const lastYOffset = (currentCents / centsRangeVisual) * (canvasHeight / 2); let lastY = centerY - lastYOffset; lastY = Math.max(canvasCtx.lineWidth, Math.min(canvasHeight - canvasCtx.lineWidth, lastY)); const lastX = ((pitchHistory.length - 1) / (historySize - 1)) * canvasWidth; canvasCtx.fillStyle = canvasCtx.strokeStyle; canvasCtx.beginPath(); canvasCtx.arc(lastX, lastY, 4, 0, Math.PI * 2); canvasCtx.fill(); } updateCentsDisplay(currentCents);
+        }
+
+        // --- Helper Functions ---
+        function parseNoteForVexFlow(noteName) { /* Remains the same */
+             if (!noteName || typeof noteName !== 'string') { return null; } const match = noteName.match(/^([A-G])([#b]?)\/?([A-G])?([#b]?)(\d)$/i); if (!match) { return null; } let noteLetter = match[1].toLowerCase(); let accidental = match[2] || null; const octave = match[5]; if (!accidental && match[4]) { accidental = match[4]; } let vexAccidentalType = null; if (accidental === '#') vexAccidentalType = '#'; if (accidental === 'b') vexAccidentalType = 'b'; let key = `${noteLetter}${accidental || ''}/${octave}`; return { key: key, accidental: vexAccidentalType };
+        }
+        function populateNoteSelector() { /* Remains the same */
+            console.log("Populating note selector..."); noteSelect.innerHTML = ''; Object.keys(notes).forEach(note => { const option = document.createElement('option'); option.value = note; option.textContent = note; noteSelect.appendChild(option); }); console.log("Note selector populated.");
+        }
+
+        // --- UI Updates ---
+        function updateTargetFrequency() { /* Remains the same */
+            const selectedNote = noteSelect.value; targetFrequency = notes[selectedNote]; targetFreqSpan.textContent = targetFrequency.toFixed(2); console.log(`Target frequency updated to: ${targetFrequency} for note ${selectedNote}`); drawNoteOnStave(selectedNote); pitchHistory = []; drawVisualizer(null); updateCentsDisplay(null); if (!isListening) { currentFreqSpan.textContent = '-'; }
+        }
+        function setStatus(message, isError = false) { /* Remains the same */
+            if(statusDiv) statusDiv.textContent = message; if(statusDiv) statusDiv.style.color = isError ? '#ef4444' : '#4b5563';
+        }
+        function updateCentsDisplay(cents) { /* Remains the same */
+             if(!centsDisplay) return; centsDisplay.classList.remove('in-tune', 'high', 'low'); if (cents === null) { centsDisplay.textContent = '-- cents'; centsDisplay.style.color = '#6b7280'; } else { const sign = cents > 0 ? '+' : ''; centsDisplay.textContent = `${sign}${cents.toFixed(0)} cents`; if (Math.abs(cents) <= toleranceCents) { centsDisplay.classList.add('in-tune'); } else if (cents > toleranceCents) { centsDisplay.classList.add('high'); } else { centsDisplay.classList.add('low'); } }
+        }
+        function updateButtonState(listening) { /* Remains the same */
+            if(!startButton || !playNoteButton || !noteSelect || !startStopIcon || !startButtonText) return; if (listening) { startStopIcon.src = iconUrls.stop; startStopIcon.alt = 'Stop'; startButtonText.textContent = 'Stop Listening'; startButton.classList.remove('bg-blue-500', 'hover:bg-blue-600'); startButton.classList.add('bg-red-500', 'hover:bg-red-600'); noteSelect.disabled = true; playNoteButton.disabled = true; } else { startStopIcon.src = iconUrls.mic; startStopIcon.alt = 'Start'; startButtonText.textContent = 'Start Listening'; startButton.classList.remove('bg-red-500', 'hover:bg-red-600'); startButton.classList.add('bg-blue-500', 'hover:bg-blue-600'); noteSelect.disabled = false; playNoteButton.disabled = false; }
+        }
+
+        // --- Audio Processing ---
+        async function toggleListening() { /* Remains the same */
+            if (!audioContext) { setStatus("Audio not initialized.", true); return; } if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { setStatus('getUserMedia not supported.', true); return; } if (isListening) { stopListening(); } else { await startListening(); } updateButtonState(isListening);
+        }
+        async function startListening() { /* Remains the same */
+            try { if (audioContext.state === 'suspended') { await audioContext.resume(); } setStatus('Requesting microphone access...'); microphoneStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false }); setStatus('Microphone access granted. Starting analysis...'); const source = audioContext.createMediaStreamSource(microphoneStream); analyser = audioContext.createAnalyser(); analyser.fftSize = bufferSize * 2; scriptProcessor = audioContext.createScriptProcessor(bufferSize, 1, 1); source.connect(analyser); analyser.connect(scriptProcessor); scriptProcessor.connect(audioContext.destination); scriptProcessor.onaudioprocess = (e) => { if (!isListening) return; try { analyser.getFloatTimeDomainData(pitchBuffer); const freq = autoCorrelate(pitchBuffer, audioContext.sampleRate); cancelAnimationFrame(animationFrameId); animationFrameId = requestAnimationFrame(() => updateUI(freq)); } catch (err) { console.error("Error in audio processing loop:", err); } }; isListening = true; pitchHistory = []; drawVisualizer(null); setStatus('Listening...'); } catch (err) { setStatus(`Mic Error: ${err.message}`, true); console.error('Mic Error:', err); stopListening(); }
+        }
+        function stopListening() { /* Remains the same */
+             if (scriptProcessor) { scriptProcessor.disconnect(); scriptProcessor.onaudioprocess = null; scriptProcessor = null; } if (analyser) { analyser.disconnect(); analyser = null; } if (microphoneStream) { microphoneStream.getTracks().forEach(track => track.stop()); microphoneStream = null; } isListening = false; cancelAnimationFrame(animationFrameId); setStatus('Ready'); if(audioContext && audioContext.state === 'running') { /* audioContext.suspend(); */ } updateUI(null);
+        }
+        function updateUI(frequency) { /* Remains the same */
+             if (isListening && frequency !== null && frequency > 0) { currentFreqSpan.textContent = frequency.toFixed(2); } else { currentFreqSpan.textContent = '-'; } drawVisualizer(frequency); const currentCents = (frequency !== null && frequency > 0 && targetFrequency > 0) ? 1200 * Math.log2(frequency / targetFrequency) : null; if (isListening) { if (currentCents === null) { setStatus('Listening...'); } else if (Math.abs(currentCents) <= toleranceCents) { setStatus('In Tune!'); } else if (currentCents > toleranceCents) { setStatus('Too High!'); } else { setStatus('Too Low!'); } } else { setStatus('Ready'); }
+        }
+
+
+        // --- Pitch Detection (Modified) ---
+        function autoCorrelate(buffer, sampleRate) {
+            const SIZE = buffer.length;
+            let rms = 0;
+            for (let i = 0; i < SIZE; i++) {
+                const val = buffer[i];
+                rms += val * val;
+            }
+            rms = Math.sqrt(rms / SIZE);
+
+            // Lowered RMS threshold check
+            if (rms < MIN_RMS_THRESHOLD) {
+                return null; // Not enough signal
+            }
+
+            // --- Autocorrelation on the whole buffer (trimming removed) ---
+            const c = new Float32Array(SIZE);
+            for (let lag = 0; lag < SIZE; lag++) {
+                for (let i = 0; i < SIZE - lag; i++) {
+                    c[lag] += buffer[i] * buffer[i + lag];
+                }
+            }
+
+            // Find the first minimum (roughly where the correlation starts increasing significantly)
+            let d = 0;
+            while (d < c.length - 1 && c[d] > c[d + 1]) {
+                d++;
+            }
+
+            // Find the peak after the first minimum
+            let maxval = -1, maxpos = -1;
+            for (let i = d; i < SIZE; i++) {
+                if (c[i] > maxval) {
+                    maxval = c[i];
+                    maxpos = i;
+                }
+            }
+
+            // Check if a reasonable peak was found
+            if (maxpos === -1 || maxpos === 0) {
+                 return null;
+            }
+
+            let T0 = maxpos; // T0 is the estimated period in samples
+
+             // Parabolic interpolation for better accuracy (around the peak)
+             if (T0 > 0 && T0 < SIZE - 1) {
+                 const x1 = c[T0 - 1], x2 = c[T0], x3 = c[T0 + 1];
+                 const a = (x1 + x3 - 2 * x2) / 2;
+                 const b = (x3 - x1) / 2;
+                 if (Math.abs(a) > 1e-6) { // Avoid division by zero/small numbers
+                     const delta = -b / (2 * a);
+                     // Ensure interpolated peak is within reasonable bounds of the original peak
+                     if (Math.abs(delta) < 1) {
+                         T0 += delta;
+                     }
+                 }
+             }
+
+            // Final checks on the period
+            if (T0 <= 0) {
+                return null; // Period must be positive
+            }
+
+            const calculatedFreq = sampleRate / T0;
+
+            // Check if frequency is within a reasonable range for singing
+            if (calculatedFreq < MIN_DETECTABLE_FREQ || calculatedFreq > MAX_DETECTABLE_FREQ) {
+                 // console.log(`Frequency out of range: ${calculatedFreq.toFixed(1)} Hz`); // Optional debug log
+                 return null;
+            }
+
+            return calculatedFreq;
+        }
+
+    </script>
+
+</body>
+</html>
